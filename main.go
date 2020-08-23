@@ -1,200 +1,151 @@
+/*
+SPDX-License-Identifier: Apache-2.0
+*/
+
 package main
 
 import (
-	"fmt"
-
-	"github.com/hyperledger/fabric/core/chaincode/shim"
-	"github.com/hyperledger/fabric/protos/peer"
-	"time"
 	"encoding/json"
+	"fmt"
+	"strconv"
+
+	"github.com/hyperledger/fabric-contract-api-go/contractapi"
 )
 
-type ApartementRegister struct {
+// SmartContract provides functions for managing a car
+type SmartContract struct {
+	contractapi.Contract
 }
 
-type Renter struct {
-	name    string
-	surname string
-	movedIn time.Time
+// Car describes basic details of what makes up a car
+type Car struct {
+	Make   string `json:"make"`
+	Model  string `json:"model"`
+	Colour string `json:"colour"`
+	Owner  string `json:"owner"`
 }
 
-type Block struct {
-	id       string
-	street   string
-	number   string
-	renters  []Renter
-	nOfRooms string
+// QueryResult structure used for handling result of query
+type QueryResult struct {
+	Key    string `json:"Key"`
+	Record *Car
 }
 
-//cache of blocks id
-var blocks map[string]bool
-
-func createId(street string, number string) string {
-	return fmt.Sprintf("%s%d", street, number)
-}
-
-//retrieve a block on the ledger
-func getBlock(stub shim.ChaincodeStubInterface, key string) (*Block, error) {
-	var block Block
-	block_marshalled, err := stub.GetState(key)
-	err = json.Unmarshal(block_marshalled, &block)
-	return &block, err
-}
-
-//save a block on the ledger
-func putBlock(stub shim.ChaincodeStubInterface, key string, block *Block) error {
-	block_marshalled, _ := json.Marshal(*block)
-	return stub.PutState(key, block_marshalled)
-}
-
-//returns information about a renter
-func queryRenter(stub shim.ChaincodeStubInterface, street string, number string, name string) peer.Response {
-	id := createId(street, number)
-	if !blocks[id] {
-		return shim.Error(fmt.Sprintf("No block %s registered", id))
-	}
-	block, _ := getBlock(stub, id)
-	var renter *Renter
-	for _, r := range block.renters {
-		if r.name == name {
-			renter = &r
-		}
-	}
-	if renter == nil {
-		return shim.Error(fmt.Sprintf("Could not find renter %s in block %s", name, id))
-	} else {
-		renter_marshalled, _ := json.Marshal(*renter)
-		return shim.Success(renter_marshalled)
-	}
-}
-
-//registers a new renter in an apartmentblock
-func registerNewRenter(stub shim.ChaincodeStubInterface, street string, number string, name string, surname string) peer.Response {
-	id := createId(street, number)
-	if !blocks[id] {
-		return shim.Error(fmt.Sprintf("No block %s registered", id))
-	}
-	block, err := getBlock(stub, id)
-	if err != nil {
-		return shim.Error(fmt.Sprintf("could not retrieve %s", id))
+// InitLedger adds a base set of cars to the ledger
+func (s *SmartContract) InitLedger(ctx contractapi.TransactionContextInterface) error {
+	cars := []Car{
+		Car{Make: "Toyota", Model: "Prius", Colour: "blue", Owner: "Tomoko"},
+		Car{Make: "Ford", Model: "Mustang", Colour: "red", Owner: "Brad"},
+		Car{Make: "Hyundai", Model: "Tucson", Colour: "green", Owner: "Jin Soo"},
+		Car{Make: "Volkswagen", Model: "Passat", Colour: "yellow", Owner: "Max"},
+		Car{Make: "Tesla", Model: "S", Colour: "black", Owner: "Adriana"},
+		Car{Make: "Peugeot", Model: "205", Colour: "purple", Owner: "Michel"},
+		Car{Make: "Chery", Model: "S22L", Colour: "white", Owner: "Aarav"},
+		Car{Make: "Fiat", Model: "Punto", Colour: "violet", Owner: "Pari"},
+		Car{Make: "Tata", Model: "Nano", Colour: "indigo", Owner: "Valeria"},
+		Car{Make: "Holden", Model: "Barina", Colour: "brown", Owner: "Shotaro"},
 	}
 
-	now := time.Now()
-	renter := Renter{
-		name:    name,
-		surname: surname,
-		movedIn: now,
-	}
+	for i, car := range cars {
+		carAsBytes, _ := json.Marshal(car)
+		err := ctx.GetStub().PutState("CAR"+strconv.Itoa(i), carAsBytes)
 
-	block.renters = append(block.renters, renter)
-
-	block_marshalled, _ := json.Marshal(*block)
-	err = stub.PutState(id, block_marshalled)
-	if err != nil {
-		return shim.Error(fmt.Sprintf("could not update %s", id))
-	}
-	block_marshalled, err = stub.GetState(id)
-	json.Unmarshal(block_marshalled, block)
-	return shim.Success([]byte(fmt.Sprintf("Block %s has now %d renters", id, len(block.renters))))
-}
-
-//creates a new block
-func newBlock(stub shim.ChaincodeStubInterface, street string, number string, nOfRooms string) peer.Response {
-	id := createId(street, number)
-	if blocks[id] {
-		return shim.Error(fmt.Sprintf("Block %s already exists", id))
-	}
-	blocks[id] = true
-
-	block := new(Block)
-	block.id = id
-	block.street = street
-	block.number = number
-	block.nOfRooms = nOfRooms
-	putBlock(stub, id, block)
-
-	blocks_marshalled, _ := json.Marshal(blocks)
-	stub.PutState("blocksIdCache", blocks_marshalled)
-
-	return shim.Success([]byte(fmt.Sprintf("Successfully created block %s.", id)))
-}
-
-//returns the number of blocks
-func blocksCount() peer.Response {
-	count := len(blocks)
-	return shim.Success([]byte(fmt.Sprintf("%d blocks found", count)))
-}
-
-//returns the number of renters in a specific block
-func rentersCount(stub shim.ChaincodeStubInterface, street string, number string) peer.Response {
-	id := createId(street, number)
-	block, err := getBlock(stub, id)
-	if block == nil || err != nil {
-		return shim.Error(fmt.Sprintf("could not retrieve %s %d", street, number))
-	}
-
-	return shim.Success([]byte(fmt.Sprintf("%d renters in %s found", len(block.renters), block.id)))
-}
-
-//Finds an apartmentblock whithout any renters
-func findEmptyBlock(stub shim.ChaincodeStubInterface) peer.Response {
-	for id, _ := range blocks {
-		block, err := getBlock(stub, id)
 		if err != nil {
-			shim.Error(fmt.Sprintf("Could not find block %s", id))
-		}
-		if len(block.renters) == 0 {
-			block_marshalled, err := json.Marshal(*block)
-			if err != nil {
-				return shim.Error("Could not marshal block.")
-			}
-			return shim.Success(block_marshalled)
+			return fmt.Errorf("Failed to put to world state. %s", err.Error())
 		}
 	}
-	return shim.Error("No blocks empty")
+
+	return nil
 }
 
-//Initialisation of the Chaincode
-func (m *ApartementRegister) Init(stub shim.ChaincodeStubInterface) peer.Response {
-	blocks = make(map[string]bool)
-	return shim.Success([]byte("Successfully initialized Chaincode."))
-}
-
-//Entry Point of an invocation
-func (m *ApartementRegister) Invoke(stub shim.ChaincodeStubInterface) peer.Response {
-	function, para := stub.GetFunctionAndParameters()
-
-	switch(function) {
-	case "queryRenter":
-		if len(para) < 3 {
-			return shim.Error("not enough arguments for queryRenter. 3 required")
-		} else {
-			return queryRenter(stub, para[0], para[1], para[2])
-		}
-	case "registerRenter":
-		if len(para) < 3 {
-			return shim.Error("not enough arguments for registerRenter. 4 required")
-		} else {
-			return registerNewRenter(stub, para[0], para[1], para[2], para[3])
-		}
-	case "newBlock":
-		return newBlock(stub, para[0], para[1], para[2])
-	case "blocksCount":
-		return blocksCount()
-	case "rentersCount":
-		if len(para) < 2 {
-			return shim.Error("not enough arguments for rentersCount. 2 required")
-		} else {
-			return rentersCount(stub, para[0], para[1])
-		}
-	case "findEmptyBlock":
-		return findEmptyBlock(stub)
+// CreateCar adds a new car to the world state with given details
+func (s *SmartContract) CreateCar(ctx contractapi.TransactionContextInterface, carNumber string, make string, model string, colour string, owner string) error {
+	car := Car{
+		Make:   make,
+		Model:  model,
+		Colour: colour,
+		Owner:  owner,
 	}
-	return shim.Error(fmt.Sprintf("No function %s implemented", function))
+
+	carAsBytes, _ := json.Marshal(car)
+
+	return ctx.GetStub().PutState(carNumber, carAsBytes)
+}
+
+// QueryCar returns the car stored in the world state with given id
+func (s *SmartContract) QueryCar(ctx contractapi.TransactionContextInterface, carNumber string) (*Car, error) {
+	carAsBytes, err := ctx.GetStub().GetState(carNumber)
+
+	if err != nil {
+		return nil, fmt.Errorf("Failed to read from world state. %s", err.Error())
+	}
+
+	if carAsBytes == nil {
+		return nil, fmt.Errorf("%s does not exist", carNumber)
+	}
+
+	car := new(Car)
+	_ = json.Unmarshal(carAsBytes, car)
+
+	return car, nil
+}
+
+// QueryAllCars returns all cars found in world state
+func (s *SmartContract) QueryAllCars(ctx contractapi.TransactionContextInterface) ([]QueryResult, error) {
+	startKey := ""
+	endKey := ""
+
+	resultsIterator, err := ctx.GetStub().GetStateByRange(startKey, endKey)
+
+	if err != nil {
+		return nil, err
+	}
+	defer resultsIterator.Close()
+
+	results := []QueryResult{}
+
+	for resultsIterator.HasNext() {
+		queryResponse, err := resultsIterator.Next()
+
+		if err != nil {
+			return nil, err
+		}
+
+		car := new(Car)
+		_ = json.Unmarshal(queryResponse.Value, car)
+
+		queryResult := QueryResult{Key: queryResponse.Key, Record: car}
+		results = append(results, queryResult)
+	}
+
+	return results, nil
+}
+
+// ChangeCarOwner updates the owner field of car with given id in world state
+func (s *SmartContract) ChangeCarOwner(ctx contractapi.TransactionContextInterface, carNumber string, newOwner string) error {
+	car, err := s.QueryCar(ctx, carNumber)
+
+	if err != nil {
+		return err
+	}
+
+	car.Owner = newOwner
+
+	carAsBytes, _ := json.Marshal(car)
+
+	return ctx.GetStub().PutState(carNumber, carAsBytes)
 }
 
 func main() {
-	if err := shim.Start(new(ApartementRegister)); err != nil {
-		fmt.Printf("Error starting SimpleAsset chaincode: %s", err)
+
+	chaincode, err := contractapi.NewChaincode(new(SmartContract))
+
+	if err != nil {
+		fmt.Printf("Error create fabcar chaincode: %s", err.Error())
+		return
+	}
+
+	if err := chaincode.Start(); err != nil {
+		fmt.Printf("Error starting fabcar chaincode: %s", err.Error())
 	}
 }
